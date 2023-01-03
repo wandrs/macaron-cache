@@ -16,13 +16,14 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/unknwon/com"
 	"gopkg.in/ini.v1"
-	"gopkg.in/redis.v2"
 
 	"github.com/go-macaron/cache"
 )
@@ -40,7 +41,7 @@ type RedisCacher struct {
 func (c *RedisCacher) Put(key string, val interface{}, expire int64) error {
 	key = c.prefix + key
 	if expire == 0 {
-		if err := c.c.Set(key, com.ToStr(val)).Err(); err != nil {
+		if err := c.c.Set(context.TODO(), key, com.ToStr(val), 0).Err(); err != nil {
 			return err
 		}
 	} else {
@@ -48,7 +49,7 @@ func (c *RedisCacher) Put(key string, val interface{}, expire int64) error {
 		if err != nil {
 			return err
 		}
-		if err = c.c.SetEx(key, dur, com.ToStr(val)).Err(); err != nil {
+		if err = c.c.SetEX(context.TODO(), key, com.ToStr(val), dur).Err(); err != nil {
 			return err
 		}
 	}
@@ -56,12 +57,12 @@ func (c *RedisCacher) Put(key string, val interface{}, expire int64) error {
 	if c.occupyMode {
 		return nil
 	}
-	return c.c.HSet(c.hsetName, key, "0").Err()
+	return c.c.HSet(context.TODO(), c.hsetName, key, "0").Err()
 }
 
 // Get gets cached value by given key.
 func (c *RedisCacher) Get(key string) interface{} {
-	val, err := c.c.Get(c.prefix + key).Result()
+	val, err := c.c.Get(context.TODO(), c.prefix+key).Result()
 	if err != nil {
 		return nil
 	}
@@ -71,14 +72,14 @@ func (c *RedisCacher) Get(key string) interface{} {
 // Delete deletes cached value by given key.
 func (c *RedisCacher) Delete(key string) error {
 	key = c.prefix + key
-	if err := c.c.Del(key).Err(); err != nil {
+	if err := c.c.Del(context.TODO(), key).Err(); err != nil {
 		return err
 	}
 
 	if c.occupyMode {
 		return nil
 	}
-	return c.c.HDel(c.hsetName, key).Err()
+	return c.c.HDel(context.TODO(), c.hsetName, key).Err()
 }
 
 // Incr increases cached int-type value by given key as a counter.
@@ -86,7 +87,7 @@ func (c *RedisCacher) Incr(key string) error {
 	if !c.IsExist(key) {
 		return fmt.Errorf("key '%s' not exist", key)
 	}
-	return c.c.Incr(c.prefix + key).Err()
+	return c.c.Incr(context.TODO(), c.prefix+key).Err()
 }
 
 // Decr decreases cached int-type value by given key as a counter.
@@ -94,17 +95,17 @@ func (c *RedisCacher) Decr(key string) error {
 	if !c.IsExist(key) {
 		return fmt.Errorf("key '%s' not exist", key)
 	}
-	return c.c.Decr(c.prefix + key).Err()
+	return c.c.Decr(context.TODO(), c.prefix+key).Err()
 }
 
 // IsExist returns true if cached value exists.
 func (c *RedisCacher) IsExist(key string) bool {
-	if c.c.Exists(c.prefix + key).Val() {
+	if c.c.Exists(context.TODO(), c.prefix+key).Val() > 0 {
 		return true
 	}
 
 	if !c.occupyMode {
-		c.c.HDel(c.hsetName, c.prefix+key)
+		c.c.HDel(context.TODO(), c.hsetName, c.prefix+key)
 	}
 	return false
 }
@@ -112,17 +113,17 @@ func (c *RedisCacher) IsExist(key string) bool {
 // Flush deletes all cached data.
 func (c *RedisCacher) Flush() error {
 	if c.occupyMode {
-		return c.c.FlushDb().Err()
+		return c.c.FlushDB(context.TODO()).Err()
 	}
 
-	keys, err := c.c.HKeys(c.hsetName).Result()
+	keys, err := c.c.HKeys(context.TODO(), c.hsetName).Result()
 	if err != nil {
 		return err
 	}
-	if err = c.c.Del(keys...).Err(); err != nil {
+	if err = c.c.Del(context.TODO(), keys...).Err(); err != nil {
 		return err
 	}
-	return c.c.Del(c.hsetName).Err()
+	return c.c.Del(context.TODO(), c.hsetName).Err()
 }
 
 // StartAndGC starts GC routine based on config string settings.
@@ -148,7 +149,7 @@ func (c *RedisCacher) StartAndGC(opts cache.Options) error {
 		case "password":
 			opt.Password = v
 		case "db":
-			opt.DB = com.StrTo(v).MustInt64()
+			opt.DB = com.StrTo(v).MustInt()
 		case "pool_size":
 			opt.PoolSize = com.StrTo(v).MustInt()
 		case "idle_timeout":
@@ -166,7 +167,7 @@ func (c *RedisCacher) StartAndGC(opts cache.Options) error {
 	}
 
 	c.c = redis.NewClient(opt)
-	if err = c.c.Ping().Err(); err != nil {
+	if err = c.c.Ping(context.TODO()).Err(); err != nil {
 		return err
 	}
 
